@@ -1,0 +1,55 @@
+Data replication algorithms used in commercial systems
+traditionally perform synchronous replica coordination in order to
+provide a strongly consistent data access interface. To achieve this
+level of consistency, these algorithms are forced to tradeoff the
+availability of the data under certain failure scenarios. For
+instance, rather than dealing with the uncertainty of the
+correctness of an answer, the data is made unavailable until it is
+absolutely certain that it is correct. From the very early replicated
+database works, it is well known that when dealing with the
+possibility of network failures, strong consistency and high data
+availability cannot be achieved simultaneously [2, 11]. As such
+systems and applications need to be aware which properties can
+be achieved under which conditions.
+For systems prone to server and network failures, availability can
+be increased by using optimistic replication techniques, where
+changes are allowed to propagate to replicas in the background,
+and concurrent, disconnected work is tolerated. The challenge
+with this approach is that it can lead to conflicting changes which
+must be detected and resolved. This process of conflict resolution
+introduces two problems: when to resolve them and who resolves
+them. Dynamo is designed to be an eventually consistent data
+store; that is all updates reach all replicas eventually.
+An important design consideration is to decide when to perform
+the process of resolving update conflicts, i.e., whether conflicts
+should be resolved during reads or writes. Many traditional data
+stores execute conflict resolution during writes and keep the read
+complexity simple [7]. In such systems, writes may be rejected if
+the data store cannot reach all (or a majority of) the replicas at a
+given time. On the other hand, Dynamo targets the design space
+of an “always writeable” data store (i.e., a data store that is highly
+available for writes). For a number of Amazon services, rejecting
+customer updates could result in a poor customer experience. For
+instance, the shopping cart service must allow customers to add
+and remove items from their shopping cart even amidst network
+and server failures. This requirement forces us to push the
+complexity of conflict resolution to the reads in order to ensure
+that writes are never rejected.
+Figure 1: Service-oriented architecture of Amazon’s
+platform197207
+The next design choice is who performs the process of conflict
+resolution. This can be done by the data store or the application. If
+conflict resolution is done by the data store, its choices are rather
+limited. In such cases, the data store can only use simple policies,
+such as “last write wins” [22], to resolve conflicting updates. On
+the other hand, since the application is aware of the data schema it
+can decide on the conflict resolution method that is best suited for
+its client’s experience. For instance, the application that maintains
+customer shopping carts can choose to “merge” the conflicting
+versions and return a single unified shopping cart. Despite this
+flexibility, some application developers may not want to write
+their own conflict resolution mechanisms and choose to push it
+down to the data store, which in turn chooses a simple policy such
+as “last write wins”.
+
+Source: Giuseppe DeCandia et al., "Dynamo: Amazon’s Highly Available Key-value Store"

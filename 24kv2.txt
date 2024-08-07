@@ -1,0 +1,466 @@
+Chubby’s clients are individual processes, so Chubby
+must handle more clients than one might expect; we
+have seen 90,000 clients communicating directly with a
+Chubby master—far more than the number of machines
+involved. Because there is just one master per cell, and
+its machine is identical to those of the clients, the clients
+can overwhelm the master by a huge margin. Thus, the
+most effective scaling techniques reduce communication
+with the master by a significant factor. Assuming the
+master has no serious performance bug, minor improve-
+ments in request processing at the master have little ef-
+fect. We use several approaches:
+• We can create an arbitrary number of Chubby cells;
+clients almost always use a nearby cell (found with
+DNS) to avoid reliance on remote machines. Our typ-
+ical deployment uses one Chubby cell for a data centre
+of several thousand machines.
+• The master may increase lease times from the default
+12s up to around 60s when it is under heavy load, so
+it need process fewer KeepAlive RPCs. (KeepAlives
+are by far the dominant type of request (see 4.1), and
+failure to process them in time is the typical failure
+mode of an overloaded server; clients are largely in-
+sensitive to latency variation in other calls.)
+• Chubby clients cache file data, meta-data, the absence
+of files, and open handles to reduce the number of
+calls they make on the server.
+• We use protocol-conversion servers that translate the
+Chubby protocol into less-complex protocols such as
+DNS and others. We discuss some of these below.
+Here we describe two familiar mechanisms, proxies
+and partitioning, that we expect will allow Chubby to
+scale further. We do not yet use them in production,
+but they are designed, and may be used soon. We have
+no present need to consider scaling beyond a factor of
+five: First, there are limits on the number of machines
+one would wish to put in a data centre or make reliant on
+a single instance of a service. Second, because we use
+similar machines for Chubby clients and servers, hard-
+ware improvements that increase the number of clients
+per machine also increase the capacity of each server.
+3.1 Proxies
+Chubby’s protocol can be proxied (using the same pro-
+tocol on both sides) by trusted processes that pass re-
+quests from other clients to a Chubby cell. A proxy
+can reduce server load by handling both KeepAlive and
+read requests; it cannot reduce write traffic, which passes
+through the proxy’s cache. But even with aggressive
+client caching, write traffic constitutes much less than
+one percent of Chubby’s normal workload (see §4.1),
+so proxies allow a significant increase in the number of
+clients. If a proxy handles Nproxy clients, KeepAlive
+traffic is reduced by a factor of Nproxy , which might be
+10 thousand or more. A proxy cache can reduce read
+traffic by at most the mean amount of read-sharing—a
+factor of around 10 (§4.1). But because reads constitute
+under 10% of Chubby’s load at present, the saving in
+KeepAlive traffic is by far the more important effect.
+Proxies add an additional RPC to writes and first-time
+reads. One might expect proxies to make the cell tem-
+porarily unavailable at least twice as often as before, be-
+cause each proxied client depends on two machines that
+may fail: its proxy and the Chubby master.
+Alert readers will notice that the fail-over strategy de-
+scribed in Section 2.9, is not ideal for proxies. We dis-
+cuss this problem in Section 4.4.
+3.2 Partitioning
+As mentioned in Section 2.3, Chubby’s interface was
+chosen so that the name space of a cell could be par-
+titioned between servers. Although we have not yet
+needed it, the code can partition the name space by di-
+rectory. If enabled, a Chubby cell would be composed of
+N partitions, each of which has a set of replicas and a
+master. Every node D/C in directory D would be stored
+on the partition P (D/C) = hash(D) mod N . Note that
+the meta-data for D may be stored on a different partition
+P (D) = hash(D′) mod N , where D′ is the parent of D.
+Partitioning is intended to enable large Chubby cells
+with little communication between the partitions. Al-
+though Chubby lacks hard links, directory modified-
+times, and cross-directory rename operations, a few op-
+erations still require cross-partition communication:
+• ACLs are themselves files, so one partition may use
+another for permissions checks. However, ACL files
+are readily cached; only Open() and Delete() calls
+require ACL checks; and most clients read publicly
+accessible files that require no ACL.
+• When a directory is deleted, a cross-partition call may
+be needed to ensure that the directory is empty.
+Because each partition handles most calls independently
+of the others, we expect this communication to have only
+a modest impact on performance or availability.
+Unless the number of partitions N is large, one would
+expect that each client would contact the majority of the
+partitions. Thus, partitioning reduces read and write traf-
+fic on any given partition by a factor of N but does not
+necessarily reduce KeepAlive traffic. Should it be nec-
+essary for Chubby to handle more clients, our strategy
+involves a combination of proxies and partitioning.
+4 Use, surprises and design errors
+4.1 Use and behaviour
+The following table gives statistics taken as a snapshot of
+a Chubby cell; the RPC rate was a seen over a ten-minute
+period. The numbers are typical of cells in Google.
+time since last fail-over 18 days
+fail-over duration 14s
+active clients (direct) 22k
+additional proxied clients 32k
+files open 12k
+naming-related 60%
+client-is-caching-file entries 230k
+distinct files cached 24k
+names negatively cached 32k
+exclusive locks 1k
+shared locks 0
+stored directories 8k
+ephemeral 0.1%
+stored files 22k
+0-1k bytes 90%
+1k-10k bytes 10%
+> 10k bytes 0.2%
+naming-related 46%
+mirrored ACLs & config info 27%
+GFS and Bigtable meta-data 11%
+ephemeral 3%
+RPC rate 1-2k/s
+KeepAlive 93%
+GetStat 2%
+Open 1%
+CreateSession 1%
+GetContentsAndStat 0.4%
+SetContents 680ppm
+Acquire 31ppm
+Several things can be seen:
+• Many files are used for naming; see §4.3.
+• Configuration, access control, and meta-data files
+(analogous to file system super-blocks) are common.
+• Negative caching is significant.
+• 230k/24k≈10 clients use each cached file, on average.
+• Few clients hold locks, and shared locks are rare; this
+is consistent with locking being used for primary elec-
+tion and partitioning data among replicas.
+• RPC traffic is dominated by session KeepAlives; there
+are a few reads (which are cache misses); there are
+very few writes or lock acquisitions.
+Now we briefly describe the typical causes of outages
+in our cells. If we assume (optimistically) that a cell is
+“up” if it has a master that is willing to serve, on a sam-
+ple of our cells we recorded 61 outages over a period of
+a few weeks, amounting to 700 cell-days of data in to-
+tal. We excluded outages due to maintenance that shut
+down the data centre. All other causes are included: net-
+work congestion, maintenance, overload, and errors due
+to operators, software, and hardware. Most outages were
+15s or less, and 52 were under 30s; most of our appli-
+cations are not affected significantly by Chubby outages
+under 30s. The remaining nine outages were caused by
+network maintenance (4), suspected network connectiv-
+ity problems (2), software errors (2), and overload (1).
+In a few dozen cell-years of operation, we have lost
+data on six occasions, due to database software errors
+(4) and operator error (2); none involved hardware er-
+ror. Ironically, the operational errors involved upgrades
+to avoid the software errors. We have twice corrected
+corruptions caused by software in non-master replicas.
+Chubby’s data fits in RAM, so most operations are
+cheap. Mean request latency at our production servers
+is consistently a small fraction of a millisecond regard-
+less of cell load until the cell approaches overload,
+when latency increases dramatically and sessions are
+dropped. Overload typically occurs when many sessions
+(> 90, 000) are active, but can result from exceptional
+conditions: when clients made millions of read requests
+simultaneously (described in Section 4.3), and when a
+mistake in the client library disabled caching for some
+reads, resulting in tens of thousands of requests per sec-
+ond. Because most RPCs are KeepAlives, the server can
+maintain a low mean request latency with many active
+clients by increasing the session lease period (see §3).
+Group commit reduces the effective work done per re-
+quest when bursts of writes arrive, but this is rare.
+RPC read latencies measured at the client are limited
+by the RPC system and network; they are under 1ms for
+a local cell, but 250ms between antipodes. Writes (which
+include lock operations) are delayed a further 5-10ms by
+the database log update, but by up to tens of seconds if a
+recently-failed client cached the file. Even this variabil-
+ity in write latency has little effect on the mean request
+latency at the server because writes are so infrequent.
+Clients are fairly insensitive to latency variation pro-
+vided sessions are not dropped. At one point, we added
+artificial delays in Open() to curb abusive clients (see
+§4.5); developers noticed only when delays exceeded ten
+seconds and were applied repeatedly. We have found that
+the key to scaling Chubby is not server performance; re-
+ducing communication to the server can have far greater
+impact. No significant effort has been applied to tuning
+read/write server code paths; we checked that no egre-
+gious bugs were present, then focused on the scaling
+mechanisms that could be more effective. On the other
+hand, developers do notice if a performance bug affects
+the local Chubby cache, which a client may read thou-
+sands of times per second.
+4.2 Java clients
+Google’s infrastructure is mostly in C++, but a growing
+number of systems are being written in Java [8]. This
+trend presented an unanticipated problem for Chubby,
+which has a complex client protocol and a non-trivial
+client-side library.
+Java encourages portability of entire applications at
+the expense of incremental adoption by making it some-
+what irksome to link against other languages. The usual
+Java mechanism for accessing non-native libraries is
+JNI [15], but it is regarded as slow and cumbersome. Our
+Java programmers so dislike JNI that to avoid its use they
+prefer to translate large libraries into Java, and commit to
+supporting them.
+Chubby’s C++ client library is 7000 lines (comparable
+with the server), and the client protocol is delicate. To
+maintain the library in Java would require care and ex-
+pense, while an implementation without caching would
+burden the Chubby servers. Thus our Java users run
+copies of a protocol-conversion server that exports a sim-
+ple RPC protocol that corresponds closely to Chubby’s
+client API. Even with hindsight, it is not obvious how
+we might have avoided the cost of writing, running and
+maintaining this additional server.
+4.3 Use as a name service
+Even though Chubby was designed as a lock service, we
+found that its most popular use was as a name server.
+Caching within the normal Internet naming system,
+the DNS, is based on time. DNS entries have a time-
+to-live (TTL), and DNS data are discarded when they
+have not been refreshed within that period. Usually it
+is straightforward to pick a suitable TTL value, but if
+prompt replacement of failed services is desired, the TTL
+can become small enough to overload the DNS servers.
+For example, it is common for our developers to
+run jobs involving thousands of processes, and for each
+process to communicate with every other, leading to a
+quadratic number of DNS lookups. We might wish to
+use a TTL of 60s; this would allow misbehaving clients
+to be replaced without excessive delay and is not con-
+sidered an unreasonably short replacement time in our
+environment. In that case, to maintain the DNS caches
+of a single job as small as 3 thousand clients would re-
+quire 150 thousand lookups per second. (For compari-
+son, a 2-CPU 2.6GHz Xeon DNS server might handle 50
+thousand requests per second.) Larger jobs create worse
+problems, and several jobs many be running at once. The
+variability in our DNS load had been a serious problem
+for Google before Chubby was introduced.
+In contrast, Chubby’s caching uses explicit invalida-
+tions so a constant rate of session KeepAlive requests
+can maintain an arbitrary number of cache entries indef-
+initely at a client, in the absence of changes. A 2-CPU
+2.6GHz Xeon Chubby master has been seen to handle
+90 thousand clients communicating directly with it (no
+proxies); the clients included large jobs with communi-
+cation patterns of the kind described above. The ability
+to provide swift name updates without polling each name
+individually is so appealing that Chubby now provides
+name service for most of the company’s systems.
+Although Chubby’s caching allows a single cell to sus-
+tain a large number of clients, load spikes can still be
+a problem. When we first deployed the Chubby-based
+name service, starting a 3 thousand process job (thus
+generating 9 million requests) could bring the Chubby
+master to its knees. To resolve this problem, we chose to
+group name entries into batches so that a single lookup
+would return and cache the name mappings for a large
+number (typically 100) of related processes within a job.
+The caching semantics provided by Chubby are more
+precise than those needed by a name service; name
+resolution requires only timely notification rather than
+full consistency. As a result, there was an opportunity
+for reducing the load on Chubby by introducing a sim-
+ple protocol-conversion server designed specifically for
+name lookups. Had we foreseen the use of Chubby as a
+name service, we might have chosen to implement full
+proxies sooner than we did in order to avoid the need for
+this simple, but nevertheless additional server.
+One further protocol-conversion server exists: the
+Chubby DNS server. This makes the naming data stored
+within Chubby available to DNS clients. This server is
+important both for easing the transition from DNS names
+to Chubby names, and to accommodate existing applica-
+tions that cannot be converted easily, such as browsers.
+4.4 Problems with fail-over
+The original design for master fail-over (§2.9) requires
+the master to write new sessions to the database as they
+are created. In the Berkeley DB version of the lock
+server, the overhead of creating sessions became a prob-
+lem when many processes were started at once. To avoid
+overload, the server was modified to store a session in the
+database not when it was first created, but instead when it
+attempted its first modification, lock acquisition, or open
+of an ephemeral file. In addition, active sessions were
+recorded in the database with some probability on each
+KeepAlive. Thus, the writes for read-only sessions were
+spread out in time.
+Though it was necessary to avoid overload, this opti-
+mization has the undesirable effect that young read-only
+sessions may not be recorded in the database, and so may
+be discarded if a fail-over occurs. Although such ses-
+sions hold no locks, this is unsafe; if all the recorded
+sessions were to check in with the new master before the
+leases of discarded sessions expired, the discarded ses-
+sions could then read stale data for a while. This is rare
+in practice; in a large system it is almost certain that some
+session will fail to check in, and thus force the new mas-
+ter to await the maximum lease time anyway. Neverthe-
+less, we have modified the fail-over design both to avoid
+this effect, and to avoid a complication that the current
+scheme introduces to proxies.
+Under the new design, we avoid recording sessions in
+the database at all, and instead recreate them in the same
+way that the master currently recreates handles (§2.9,¶8).
+A new master must now wait a full worst-case lease time-
+out before allowing operations to proceed, since it can-
+not know whether all sessions have checked in (§2.9,¶6).
+Again, this has little effect in practice because it is likely
+that not all sessions will check in.
+Once sessions can be recreated without on-disc state,
+proxy servers can manage sessions that the master is not
+aware of. An extra operation available only to proxies
+allows them to change the session that locks are asso-
+ciated with. This permits one proxy to take over a client
+from another when a proxy fails. The only further change
+needed at the master is a guarantee not to relinquish locks
+or ephemeral file handles associated with proxy sessions
+until a new proxy has had a chance to claim them.
+4.5 Abusive clients
+Google’s project teams are free to set up their own
+Chubby cells, but doing so adds to their maintenance bur-
+den, and consumes additional hardware resources. Many
+services therefore use shared Chubby cells, which makes
+it important to isolate clients from the misbehaviour of
+others. Chubby is intended to operate within a sin-
+gle company, and so malicious denial-of-service attacks
+against it are rare. However, mistakes, misunderstand-
+ings, and the differing expectations of our developers
+lead to effects that are similar to attacks.
+Some of our remedies are heavy-handed. For example,
+we review the ways project teams plan to use Chubby,
+and deny access to the shared Chubby name space until
+review is satisfactory. A problem with this approach is
+that developers are often unable to predict how their ser-
+vices will be used in the future, and how use will grow.
+Readers will note the irony of our own failure to predict
+how Chubby itself would be used.
+The most important aspect of our review is to deter-
+mine whether use of any of Chubby’s resources (RPC
+rate, disc space, number of files) grows linearly (or
+worse) with number of users or amount of data processed
+by the project. Any linear growth must be mitigated by
+a compensating parameter that can be adjusted to reduce
+the load on Chubby to reasonable bounds. Nevertheless
+our early reviews were not thorough enough.
+A related problem is the lack of performance advice in
+most software documentation. A module written by one
+team may be reused a year later by another team with
+disastrous results. It is sometimes hard to explain to in-
+terface designers that they must change their interfaces
+not because they are bad, but because other developers
+may be less aware of the cost of an RPC.
+Below we list some problem cases we encountered.
+Lack of aggressive caching Originally, we did not ap-
+preciate the critical need to cache the absence of files,
+nor to reuse open file handles. Despite attempts at ed-
+ucation, our developers regularly write loops that retry
+indefinitely when a file is not present, or poll a file by
+opening it and closing it repeatedly when one might ex-
+pect they would open the file just once.
+At first we countered these retry-loops by introduc-
+ing exponentially-increasing delays when an application
+made many attempts to Open() the same file over a short
+period. In some cases this exposed bugs that develop-
+ers acknowledged, but often it required us to spend yet
+more time on education. In the end it was easier to make
+repeated Open() calls cheap.
+Lack of quotas Chubby was never intended to be used
+as a storage system for large amounts of data, and so it
+has no storage quotas. In hindsight, this was na¨ıve.
+One of Google’s projects wrote a module to keep track
+of data uploads, storing some meta-data in Chubby. Such
+uploads occurred rarely and were limited to a small set of
+people, so the space was bounded. However, two other
+services started using the same module as a means for
+tracking uploads from a wider population of users. In-
+evitably, these services grew until the use of Chubby was
+extreme: a single 1.5MByte file was being rewritten in
+its entirety on each user action, and the overall space
+used by the service exceeded the space needs of all other
+Chubby clients combined.
+We introduced a limit on file size (256kBytes), and
+encouraged the services to migrate to more appropri-
+ate storage systems. But it is difficult to make signifi-
+cant changes to production systems maintained by busy
+people—it took approximately a year for the data to be
+migrated elsewhere.
+Publish/subscribe There have been several attempts
+to use Chubby’s event mechanism as a publish/subscribe
+system in the style of Zephyr [6]. Chubby’s heavyweight
+guarantees and its use of invalidation rather than update
+in maintaining cache consistency make it a slow and inef-
+ficient for all but the most trivial publish/subscribe exam-
+ples. Fortunately, all such uses have been caught before
+the cost of redesigning the application was too large.
+4.6 Lessons learned
+Here we list lessons, and miscellaneous design changes
+we might make if we have the opportunity:
+Developers rarely consider availability We find that
+our developers rarely think about failure probabilities,
+and are inclined to treat a service like Chubby as though
+it were always available. For example, our develop-
+ers once built a system employing hundred of machines
+that initiated recovery procedures taking tens of minutes
+when Chubby elected a new master. This magnified the
+consequences of a single failure by a factor of a hundred
+both in time and the number of machines affected. We
+would prefer developers to plan for short Chubby out-
+ages, so that such an event has little or no affect on their
+applications. This is one of the arguments for coarse-
+grained locking, discussed in Section 2.1.
+Developers also fail to appreciate the difference be-
+tween a service being up, and that service being available
+to their applications. For example, the global Chubby
+cell (see §2.12), is almost always up because it is rare for
+more than two geographically distant data centres to be
+down simultaneously. However, its observed availabil-
+ity for a given client is usually lower than the observed
+availability of the client’s local Chubby cell. First, the lo-
+cal cell is less likely to be partitioned from the client, and
+second, although the local cell may be down often due to
+maintenance, the same maintenance affects the client di-
+rectly, so Chubby’s unavailability is not observed by the
+client.
+Our API choices can also affect the way developers
+chose to handle Chubby outages. For example, Chubby
+provides an event that allows clients to detect when a
+master fail-over has taken place. The intent was for
+clients to check for possible changes, as other events
+may have been lost. Unfortunately, many developers
+chose to crash their applications on receiving this event,
+thus decreasing the availability of their systems substan-
+tially. We might have done better to send redundant “file
+change” events instead, or even to ensure that no events
+were lost during a fail-over.
+At present we use three mechanisms to prevent de-
+velopers from being over-optimistic about Chubby avail-
+ability, especially that of the global cell. First, as pre-
+viously mentioned (§4.5), we review how project teams
+plan to use Chubby, and advise them against techniques
+that would tie their availability too closely to Chubby’s.
+Second, we now supply libraries that perform some high-
+level tasks so that developers are automatically isolated
+from Chubby outages. Third, we use the post-mortem
+of each Chubby outage as a means not only of eliminat-
+ing bugs in Chubby and our operational procedures, but
+of reducing the sensitivity of applications to Chubby’s
+availability—both can lead to better availability of our
+systems overall.
+
+Source: Mike Burrows, "The Chubby lock service for loosely-coupled distributed systems"
+

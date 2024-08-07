@@ -1,0 +1,156 @@
+0~Dynamo is used by several services with different configurations.
+These instances differ by their version reconciliation logic, and
+read/write quorum characteristics. The following are the main
+patterns in which Dynamo is used:
+• Business logic specific reconciliation: This is a popular use
+case for Dynamo. Each data object is replicated across
+multiple nodes. In case of divergent versions, the client
+application performs its own reconciliation logic. The
+shopping cart service discussed earlier is a prime example of
+this category. Its business logic reconciles objects by
+merging different versions of a customer’s shopping cart.
+• Timestamp based reconciliation: This case differs from the
+previous one only in the reconciliation mechanism. In case of
+divergent versions, Dynamo performs simple timestamp
+based reconciliation logic of “last write wins”; i.e., the object
+with the largest physical timestamp value is chosen as the
+correct version. The service that maintains customer’s
+session information is a good example of a service that uses
+this mode.
+• High performance read engine: While Dynamo is built to be
+an “always writeable” data store, a few services are tuning its
+quorum characteristics and using it as a high performance
+read engine. Typically, these services have a high read
+request rate and only a small number of updates. In this
+configuration, typically R is set to be 1 and W to be N. For
+these services, Dynamo provides the ability to partition and
+replicate their data across multiple nodes thereby offering
+incremental scalability. Some of these instances function as
+the authoritative persistence cache for data stored in more
+heavy weight backing stores. Services that maintain product
+catalog and promotional items fit in this category.
+The main advantage of Dynamo is that its client applications can
+tune the values of N, R and W to achieve their desired levels of
+performance, availability and durability. For instance, the value of
+N determines the durability of each object. A typical value of N
+used by Dynamo’s users is 3.
+The values of W and R impact object availability, durability and
+consistency. For instance, if W is set to 1, then the system will
+never reject a write request as long as there is at least one node in
+the system that can successfully process a write request. However,
+low values of W and R can increase the risk of inconsistency as
+write requests are deemed successful and returned to the clients
+even if they are not processed by a majority of the replicas. This
+also introduces a vulnerability window for durability when a write
+request is successfully returned to the client even though it has
+been persisted at only a small number of nodes.
+Figure 4: Average and 99.9 percentiles of latencies for read and
+write requests during our peak request season of December 2006.
+The intervals between consecutive ticks in the x-axis correspond
+to 12 hours. Latencies follow a diurnal pattern similar to the
+request rate and 99.9 percentile latencies are an order of
+magnitude higher than averages
+Figure 5: Comparison of performance of 99.9th percentile
+latencies for buffered vs. non-buffered writes over a period of
+24 hours. The intervals between consecutive ticks in the x-axis
+correspond to one hour.204214
+Traditional wisdom holds that durability and availability go hand-
+in-hand. However, this is not necessarily true here. For instance,
+the vulnerability window for durability can be decreased by
+increasing W. This may increase the probability of rejecting
+requests (thereby decreasing availability) because more storage
+hosts need to be alive to process a write request.
+The common (N,R,W) configuration used by several instances of
+Dynamo is (3,2,2). These values are chosen to meet the necessary
+levels of performance, durability, consistency, and availability
+SLAs.
+All the measurements presented in this section were taken on a
+live system operating with a configuration of (3,2,2) and running
+a couple hundred nodes with homogenous hardware
+configurations. As mentioned earlier, each instance of Dynamo
+contains nodes that are located in multiple datacenters. These
+datacenters are typically connected through high speed network
+links. Recall that to generate a successful get (or put) response R
+(or W) nodes need to respond to the coordinator. Clearly, the
+network latencies between datacenters affect the response time
+and the nodes (and their datacenter locations) are chosen such that
+the applications target SLAs are met.
+6.1 Balancing Performance and Durability
+While Dynamo’s principle design goal is to build a highly
+available data store, performance is an equally important criterion
+in Amazon’s platform. As noted earlier, to provide a consistent
+customer experience, Amazon’s services set their performance
+targets at higher percentiles (such as the 99.9th or 99.99 th
+percentiles). A typical SLA required of services that use Dynamo
+is that 99.9% of the read and write requests execute within 300ms.
+Since Dynamo is run on standard commodity hardware
+components that have far less I/O throughput than high-end
+enterprise servers, providing consistently high performance for
+read and write operations is a non-trivial task. The involvement of
+multiple storage nodes in read and write operations makes it even
+more challenging, since the performance of these operations is
+limited by the slowest of the R or W replicas. Figure 4 shows the
+average and 99.9th percentile latencies of Dynamo’s read and
+write operations during a period of 30 days. As seen in the figure,
+the latencies exhibit a clear diurnal pattern which is a result of the
+diurnal pattern in the incoming request rate (i.e., there is a
+significant difference in request rate between the daytime and
+night). Moreover, the write latencies are higher than read latencies
+obviously because write operations always results in disk access.
+Also, the 99.9th percentile latencies are around 200 ms and are an
+order of magnitude higher than the averages. This is because the
+99.9th percentile latencies are affected by several factors such as
+variability in request load, object sizes, and locality patterns.
+While this level of performance is acceptable for a number of
+services, a few customer-facing services required higher levels of
+performance. For these services, Dynamo provides the ability to
+trade-off durability guarantees for performance. In the
+optimization each storage node maintains an object buffer in its
+main memory. Each write operation is stored in the buffer and
+gets periodically written to storage by a writer thread. In this
+scheme, read operations first check if the requested key is present
+in the buffer. If so, the object is read from the buffer instead of the
+storage engine.
+This optimization has resulted in lowering the 99.9th percentile
+latency by a factor of 5 during peak traffic even for a very small
+buffer of a thousand objects (see Figure 5). Also, as seen in the
+figure, write buffering smoothes out higher percentile latencies.
+Obviously, this scheme trades durability for performance. In this
+scheme, a server crash can result in missing writes that were
+queued up in the buffer. To reduce the durability risk, the write
+operation is refined to have the coordinator choose one out of the
+N replicas to perform a “durable write”. Since the coordinator
+waits only for W responses, the performance of the write
+operation is not affected by the performance of the durable write
+operation performed by a single replica.
+6.2 Ensuring Uniform Load distribution
+Dynamo uses consistent hashing to partition its key space across
+its replicas and to ensure uniform load distribution. A uniform key
+distribution can help us achieve uniform load distribution
+assuming the access distribution of keys is not highly skewed. In
+particular, Dynamo’s design assumes that even where there is a
+significant skew in the access distribution there are enough keys
+in the popular end of the distribution so that the load of handling
+popular keys can be spread across the nodes uniformly through
+partitioning. This section discusses the load imbalance seen in
+Dynamo and the impact of different partitioning strategies on load
+distribution.
+To study the load imbalance and its correlation with request load,
+the total number of requests received by each node was measured
+for a period of 24 hours - broken down into intervals of 30
+minutes. In a given time window, a node is considered to be “in-
+balance”, if the node’s request load deviates from the average load
+by a value a less than a certain threshold (here 15%). Otherwise
+the node was deemed “out-of-balance”. Figure 6 presents the
+fraction of nodes that are “out-of-balance” (henceforth,
+“imbalance ratio”) during this time period. For reference, the
+corresponding request load received by the entire system during
+this time period is also plotted. As seen in the figure, the
+imbalance ratio decreases with increasing load. For instance,
+during low loads the imbalance ratio is as high as 20% and during
+high loads it is close to 10%. Intuitively, this can be explained by
+the fact that under high loads, a large number of popular keys are
+accessed and due to uniform distribution of keys the load is
+evenly distributed. However, during low loads (where load is 1/8th.
+
+Source: Giuseppe DeCandia et al., "Dynamo: Amazon’s Highly Available Key-value Store"

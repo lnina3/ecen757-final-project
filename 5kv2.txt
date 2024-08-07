@@ -1,0 +1,71 @@
+Aspects of the CAP theorem are often misunderstood, particularly
+the scope of availability and consistency, which can lead to
+undesirable results. If users cannot reach the service at all, there is no
+choice between C and A except when part of the service runs on the
+client. This exception, commonly known as disconnected operation or
+offline mode,1 is becoming increasingly important. Some HTML5
+features—in particular, on-client persistent storage—make discon-
+nected operation easier going forward. These systems normally
+choose A over C and thus must recover from long partitions.
+Scope of consistency reflects the idea that, within some boundary,
+state is consistent, but outside that boundary all bets are off. For
+example, within a primary partition, it is possible to ensure complete
+consistency and availability, while outside the partition, service is not
+available. Paxos and atomic multicast systems typically match this
+scenario. 2 In Google, the primary partition usually resides within one
+datacenter; however, Paxos is used on the wide area to ensure global
+consensus, as in Chubby, 3 and highly available durable storage, as in
+Megastore.4
+Independent, self-consistent subsets can make forward progress
+while partitioned, although it is not possible to ensure global invari-
+ants. For example, with sharding, in which designers prepartition data
+across nodes, it is highly likely that each shard can make some prog-
+ress during a partition. Conversely, if the relevant state is split across a
+partition or global invariants are necessary, then at best only one side
+can make progress and at worst no progress is possible.
+Does choosing consistency and availability (CA) as the “2 of 3”
+make sense? As some researchers correctly point out, exactly what it
+means to forfeit P is unclear. 5,6 Can a designer choose not to have parti-
+tions? If the choice is CA, and then there is a partition, the choice must
+revert to C or A. It is best to think about this probabilistically: choosing
+CA should mean that the probability of a partition is far less than that
+of other systemic failures, such as disasters or multiple simultaneous
+faults.
+Such a view makes sense because real systems lose both C and A
+under some sets of faults, so all three properties are a matter of degree.
+In practice, most groups assume that a datacenter (single site) has no
+partitions within, and thus design for CA within a single site; such
+designs, including traditional databases, are the pre-CAP default.
+However, although partitions are less likely within a datacenter, they
+are indeed possible, which makes a CA goal problematic. Finally, given
+the high latency across the wide area, it is relatively common to forfeit
+perfect consistency across the wide area for better performance.
+Another aspect of CAP confusion is the hidden cost of forfeiting
+consistency, which is the need to know the system’s invariants. The
+subtle beauty of a consistent system is that the invariants tend to hold
+even when the designer does not know what they are. Consequently,
+a wide range of reasonable invariants will work just fine. Conversely,
+when designers choose A, which requires restoring invariants after a
+partition, they must be explicit about all the invariants, which is both
+challenging and prone to error. At the core, this is the same concurrent
+updates problem that makes multithreading harder than sequential
+programming.
+References
+1. J. Kistler and M. Satyanarayanan, “Disconnected Operation in the Coda File
+System” ACM Trans. Computer Systems, Feb. 1992, pp. 3-25.
+2. K. Birman, Q. Huang, and D. Freedman, “Overcoming the ‘D’ in CAP: Using
+Isis2 to Build Locally Responsive Cloud Services,” Computer, Feb. 2011, pp.
+50-58.
+3. M. Burrows, “The Chubby Lock Service for Loosely-Coupled Distributed
+Systems,” Proc. Symp. Operating Systems Design and Implementation (OSDI
+06), Usenix, 2006, pp. 335-350.
+4. J. Baker et al., “Megastore: Providing Scalable, Highly Available Storage for
+Interactive Services,” Proc. 5th Biennial Conf. Innovative Data Systems
+Research (CIDR 11), ACM, 2011, pp. 223-234.
+5. D. Abadi, “Problems with CAP, and Yahoo’s Little Known NoSQL System,”
+DBMS Musings, blog, 23 Apr. 2010; http://dbmsmusings.blogspot.
+com/2010/04/problems-with-cap-and-yahoos-little.html.
+6. C. Hale, “You Can’t Sacrifice Partition Tolerance,” 7 Oct. 2010; http://
+codahale.com/you-cant-sacrifice-partition-tolerance.
+
+Source: Eric Brewer, 'CAP Twelve Years Later: How the “Rules” Have Changed'

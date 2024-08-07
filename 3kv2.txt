@@ -1,0 +1,50 @@
+ACID and BASE represent two design philosophies at opposite
+ends of the consistency-availability spectrum. The ACID
+properties focus on consistency and are the traditional approach of
+databases. My colleagues and I created BASE in the late 1990s to
+capture the emerging design approaches for high availability and
+to make explicit both the choice and the spectrum. Modern large-
+scale wide-area systems, including the cloud, use a mix of both
+approaches.
+Although both terms are more mnemonic than precise, the
+BASE acronym (being second) is a bit more awkward: Basically
+Available, Soft state, Eventually consistent. Soft state and eventual
+consistency are techniques that work well in the presence of parti-
+tions and thus promote availability.
+The relationship between CAP and ACID is more complex and
+often misunderstood, in part because the C and A in ACID represent
+different concepts than the same letters in CAP and in part because
+choosing availability affects only some of the ACID guarantees. The
+four ACID properties are:
+Atomicity (A). All systems benefit from atomic operations.
+When the focus is availability, both sides of a partition should still
+use atomic operations. Moreover, higher-level atomic operations
+(the kind that ACID implies) actually simplify recovery.
+Consistency (C). In ACID, the C means that a transaction pre-
+serves all the database rules, such as unique keys. In contrast,
+the C in CAP refers only to single‐copy consistency, a strict
+subset of ACID consistency. ACID consistency also cannot be
+maintained across partitions—partition recovery will need to
+restore ACID consistency. More generally, maintaining invari-
+ants during partitions might be impossible, thus the need for
+careful thought about which operations to disallow and how to
+restore invariants during recovery.
+Isolation (I). Isolation is at the core of the CAP theorem: if the
+system requires ACID isolation, it can operate on at most one
+side during a partition. Serializability requires communication in
+general and thus fails across partitions. Weaker definitions
+of correctness are viable across partitions via compensation
+during partition recovery.
+Durability (D). As with atomicity, there is no reason to forfeit
+durability, although the developer might choose to avoid needing
+it via soft state (in the style of BASE) due to its expense.
+A subtle point is that, during partition recovery, it is possible to
+reverse durable operations that unknowingly violated an invariant
+during the operation. However, at the time of recovery, given a
+durable history from both sides, such operations can be detected
+and corrected. In general, running ACID transactions on each side
+of a partition makes recovery easier and enables a framework for
+compensating transactions that can be used for recovery from a
+partition.
+
+Source: Eric Brewer, 'CAP Twelve Years Later: How the “Rules” Have Changed'

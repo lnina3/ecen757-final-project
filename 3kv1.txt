@@ -1,0 +1,42 @@
+In the design of an automated teller machine (ATM), strong
+consistency would appear to be the logical choice, but in practice,
+A trumps C. The reason is straightforward enough: higher availa-
+bility means higher revenue. Regardless, ATM design serves as a
+good context for reviewing some of the challenges involved in
+compensating for invariant violations during a partition.
+The essential ATM operations are deposit, withdraw, and check
+balance. The key invariant is that the balance should be zero or
+higher. Because only withdraw can violate the invariant, it will need
+special treatment, but the other two operations can always
+execute.
+The ATM system designer could choose to prohibit withdrawals
+during a partition, since it is impossible to know the true balance at
+that time, but that would compromise availability. Instead, using
+stand-in mode (partition mode), modern ATMs limit the net with-
+drawal to at most k, where k might be $200. Below this limit,
+withdrawals work completely; when the balance reaches the limit,
+the system denies withdrawals. Thus, the ATM chooses a sophisti-
+cated limit on availability that permits withdrawals but bounds the
+risk.
+When the partition ends, there must be some way to both
+restore consistency and compensate for mistakes made while the
+system was partitioned. Restoring state is easy because the opera-
+tions are commutative, but compensation can take several forms. A
+final balance below zero violates the invariant. In the normal case,
+the ATM dispensed the money, which caused the mistake to
+become external. The bank compensates by charging a fee and
+expecting repayment. Given that the risk is bounded, the problem
+is not severe. However, suppose that the balance was below zero at
+some point during the partition (unknown to the ATM), but that a
+later deposit brought it back up. In this case, the bank might still
+charge an overdraft fee retroactively, or it might ignore the viola-
+tion, since the customer has already made the necessary payment.
+In general, because of communication delays, the banking
+system depends not on consistency for correctness, but rather on
+auditing and compensation. Another example of this is “check
+kiting,” in which a customer withdraws money from multiple
+branches before they can communicate and then flees. The over-
+draft will be caught later, perhaps leading to compensation in the
+form of legal action.
+
+Source: Eric Brewer, 'CAP Twelve Years Later: How the “Rules” Have Changed'

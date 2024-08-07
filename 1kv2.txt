@@ -1,0 +1,19 @@
+This paper has described a new state-machine replication
+algorithm that is able to tolerate Byzantine faults and can
+be used in practice: it is the first to work correctly in
+an asynchronous system like the Internet and it improves
+the performance of previous algorithms by more than an
+order of magnitude.
+The paper also described BFS, a Byzantine-fault-
+tolerant implementation of NFS. BFS demonstrates that
+it is possible to use our algorithm to implement real
+services with performance close to that of an unreplicated
+service — the performance of BFS is only 3% worse than
+that of the standard NFS implementation in Digital Unix.
+This good performance is due to a number of important
+optimizations, including replacing public-key signatures
+by vectors of message authentication codes, reducing
+the size and number of messages, and the incremental
+checkpoint-management techniques.
+
+Source: Miguel Castro and Barbara Liskov, "Practical Byzantine Fault Tolerance"

@@ -1,0 +1,22 @@
+This paper describes a lock service called Chubby. It is
+intended for use within a loosely-coupled distributed sys-
+tem consisting of moderately large numbers of small ma-
+chines connected by a high-speed network. For example,
+a Chubby instance (also known as a Chubby cell) might
+serve ten thousand 4-processor machines connected by
+1Gbit/s Ethernet. Most Chubby cells are confined to a
+single data centre or machine room, though we do run
+at least one Chubby cell whose replicas are separated by
+thousands of kilometres.
+The purpose of the lock service is to allow its clients
+to synchronize their activities and to agree on basic in-
+formation about their environment. The primary goals
+included reliability, availability to a moderately large set
+of clients, and easy-to-understand semantics; through-
+put and storage capacity were considered secondary.
+Chubby’s client interface is similar to that of a simple file
+system that performs whole-file reads and writes, aug-
+mented with advisory locks and with notification of var-
+ious events such as file modification.
+
+Source: Mike Burrows, "The Chubby lock service for loosely-coupled distributed systems"

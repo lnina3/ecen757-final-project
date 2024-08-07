@@ -1,0 +1,17 @@
+Strategy 2: T random tokens per node and equal sized partitions:
+In this strategy, the hash space is divided into Q equally sized
+partitions/ranges and each node is assigned T random tokens. Q is
+usually set such that Q >> N and Q >> S*T, where S is the
+number of nodes in the system. In this strategy, the tokens are
+only used to build the function that maps values in the hash space
+to the ordered lists of nodes and not to decide the partitioning. A
+partition is placed on the first N unique nodes that are encountered
+while walking the consistent hashing ring clockwise from the end
+of the partition. Figure 7 illustrates this strategy for N=3. In this
+example, nodes A, B, C are encountered while walking the ring
+from the end of the partition that contains key k1. The primary
+advantages of this strategy are: (i) decoupling of partitioning and
+partition placement, and (ii) enabling the possibility of changing
+the placement scheme at runtime.
+
+Source: Giuseppe DeCandia et al., "Dynamo: Amazon’s Highly Available Key-value Store"

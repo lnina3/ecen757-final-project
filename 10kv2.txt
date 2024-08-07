@@ -1,0 +1,192 @@
+Chubby has two main components that communicate
+via RPC: a server, and a library that client applications
+link against; see Figure 1. All communication between
+Chubby clients and the servers is mediated by the client
+library. An optional third component, a proxy server, is
+discussed in Section 3.1.
+A Chubby cell consists of a small set of servers (typi-
+cally five) known as replicas, placed so as to reduce the
+likelihood of correlated failure (for example, in different
+racks). The replicas use a distributed consensus protocol
+to elect a master; the master must obtain votes from a
+majority of the replicas, plus promises that those replicas
+will not elect a different master for an interval of a few
+seconds known as the master lease. The master lease is
+periodically renewed by the replicas provided the master
+continues to win a majority of the vote.
+The replicas maintain copies of a simple database, but
+only the master initiates reads and writes of this database.
+All other replicas simply copy updates from the master,
+sent using the consensus protocol.
+Clients find the master by sending master location
+requests to the replicas listed in the DNS. Non-master
+replicas respond to such requests by returning the iden-
+tity of the master. Once a client has located the master,
+the client directs all requests to it either until it ceases
+to respond, or until it indicates that it is no longer the
+master. Write requests are propagated via the consensus
+protocol to all replicas; such requests are acknowledged
+when the write has reached a majority of the replicas in
+the cell. Read requests are satisfied by the master alone;
+this is safe provided the master lease has not expired, as
+no other master can possibly exist. If a master fails, the
+other replicas run the election protocol when their master
+leases expire; a new master will typically be elected in a
+few seconds. For example, two recent elections took 6s
+and 4s, but we see values as high as 30s (§4.1).
+If a replica fails and does not recover for a few hours, a
+simple replacement system selects a fresh machine from
+a free pool and starts the lock server binary on it. It then
+updates the DNS tables, replacing the IP address of the
+failed replica with that of the new one. The current mas-
+ter polls the DNS periodically and eventually notices the
+change. It then updates the list of the cell’s members in
+the cell’s database; this list is kept consistent across all
+the members via the normal replication protocol. In the
+meantime, the new replica obtains a recent copy of the
+database from a combination of backups stored on file
+servers and updates from active replicas. Once the new
+replica has processed a request that the current master is
+waiting to commit, the replica is permitted to vote in the
+elections for new master.
+2.3 Files, directories, and handles
+Chubby exports a file system interface similar to, but
+simpler than that of UNIX [22]. It consists of a strict
+tree of files and directories in the usual way, with name
+components separated by slashes. A typical name is:
+/ls/foo/wombat/pouch
+The ls prefix is common to all Chubby names, and
+stands for lock service. The second component (foo) is
+the name of a Chubby cell; it is resolved to one or more
+Chubby servers via DNS lookup. A special cell name
+local indicates that the client’s local Chubby cell should
+be used; this is usually one in the same building and
+thus the one most likely to be accessible. The remain-
+der of the name, /wombat/pouch, is interpreted within
+the named Chubby cell. Again following UNIX, each di-
+rectory contains a list of child files and directories, while
+each file contains a sequence of uninterpreted bytes.
+Because Chubby’s naming structure resembles a file
+system, we were able to make it available to applications
+both with its own specialized API, and via interfaces
+used by our other file systems, such as the Google File
+System. This significantly reduced the effort needed to
+write basic browsing and name space manipulation tools,
+and reduced the need to educate casual Chubby users.
+The design differs from UNIX in a ways that ease dis-
+tribution. To allow the files in different directories to be
+served from different Chubby masters, we do not expose
+operations that can move files from one directory to an-
+other, we do not maintain directory modified times, and
+we avoid path-dependent permission semantics (that is,
+access to a file is controlled by the permissions on the
+file itself rather than on directories on the path leading to
+the file). To make it easier to cache file meta-data, the
+system does not reveal last-access times.
+The name space contains only files and directories,
+collectively called nodes. Every such node has only one
+name within its cell; there are no symbolic or hard links.
+Nodes may be either permanent or ephemeral. Any
+node may be deleted explicitly, but ephemeral nodes are
+also deleted if no client has them open (and, for directo-
+ries, they are empty). Ephemeral files are used as tempo-
+rary files, and as indicators to others that a client is alive.
+Any node can act as an advisory reader/writer lock; these
+locks are described in more detail in Section 2.4.
+Each node has various meta-data, including three
+names of access control lists (ACLs) used to control
+reading, writing and changing the ACL names for the
+node. Unless overridden, a node inherits the ACL names
+of its parent directory on creation. ACLs are themselves
+files located in an ACL directory, which is a well-known
+part of the cell’s local name space. These ACL files con-
+sist of simple lists of names of principals; readers may be
+reminded of Plan 9’s groups [21]. Thus, if file F’s write
+ACL name is foo, and the ACL directory contains a file
+foo that contains an entry bar, then user bar is permit-
+ted to write F. Users are authenticated by a mechanism
+built into the RPC system. Because Chubby’s ACLs are
+simply files, they are automatically available to other ser-
+vices that wish to use similar access control mechanisms.
+The per-node meta-data includes four monotonically-
+increasing 64-bit numbers that allow clients to detect
+changes easily:
+• an instance number; greater than the instance number
+of any previous node with the same name.
+• a content generation number (files only); this in-
+creases when the file’s contents are written.
+• a lock generation number; this increases when the
+node’s lock transitions from free to held.
+• an ACL generation number; this increases when the
+node’s ACL names are written.
+Chubby also exposes a 64-bit file-content checksum so
+clients may tell whether files differ.
+Clients open nodes to obtain handles that are analo-
+gous to UNIX file descriptors. Handles include:
+• check digits that prevent clients from creating or
+guessing handles, so full access control checks need
+be performed only when handles are created (com-
+pare with UNIX, which checks its permissions bits at
+open time, but not at each read/write because file de-
+scriptors cannot be forged).
+• a sequence number that allows a master to tell whether
+a handle was generated by it or by a previous master.
+• mode information provided at open time to allow the
+master to recreate its state if an old handle is presented
+to a newly restarted master.
+2.4 Locks and sequencers
+Each Chubby file and directory can act as a reader-writer
+lock: either one client handle may hold the lock in exclu-
+sive (writer) mode, or any number of client handles may
+hold the lock in shared (reader) mode. Like the mutexes
+known to most programmers, locks are advisory. That
+is, they conflict only with other attempts to acquire the
+same lock: holding a lock called F neither is necessary
+to access the file F , nor prevents other clients from do-
+ing so. We rejected mandatory locks, which make locked
+objects inaccessible to clients not holding their locks:
+• Chubby locks often protect resources implemented by
+other services, rather than just the file associated with
+the lock. To enforce mandatory locking in a meaning-
+ful way would have required us to make more exten-
+sive modification of these services.
+• We did not wish to force users to shut down appli-
+cations when they needed to access locked files for
+debugging or administrative purposes. In a complex
+system, it is harder to use the approach employed on
+most personal computers, where administrative soft-
+ware can break mandatory locks simply by instructing
+the user to shut down his applications or to reboot.
+• Our developers perform error checking in the conven-
+tional way, by writing assertions such as “lock X is
+held”, so they benefit little from mandatory checks.
+Buggy or malicious processes have many opportuni-
+ties to corrupt data when locks are not held, so we find
+the extra guards provided by mandatory locking to be
+of no significant value.
+In Chubby, acquiring a lock in either mode requires write
+permission so that an unprivileged reader cannot prevent
+a writer from making progress.
+Locking is complex in distributed systems because
+communication is typically uncertain, and processes may
+fail independently. Thus, a process holding a lock L may
+issue a request R, but then fail. Another process may ac-
+quire L and perform some action before R arrives at its
+destination. If R later arrives, it may be acted on without
+the protection of L, and potentially on inconsistent data.
+The problem of receiving messages out of order has been
+well studied; solutions include virtual time [11], and vir-
+tual synchrony [1], which avoids the problem by ensuring
+that messages are processed in an order consistent with
+the observations of every participant.
+It is costly to introduce sequence numbers into all
+the interactions in an existing complex system. Instead,
+Chubby provides a means by which sequence numbers
+can be introduced into only those interactions that make
+use of locks. At any time, a lock holder may request a se-
+quencer, an opaque byte-string that describes the state of
+the lock immediately after acquisition. It contains the
+name of the lock, the mode in which it was acquired
+(exclusive or shared), and the lock generation number.
+
+Source: Mike Burrows, "The Chubby lock service for loosely-coupled distributed systems"
